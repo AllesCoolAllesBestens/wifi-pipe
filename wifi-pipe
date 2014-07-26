@@ -3,9 +3,8 @@
 # https://github.com/pbrisbin/wifi-pipe
 #
 ###
-
-. /usr/lib/network/network
-[[ -z "$PROFILE_DIR" ]] && PROFILE_DIR='/etc/network.d/'
+#. /usr/lib/network/network
+[[ -z "$PROFILE_DIR" ]] && PROFILE_DIR='/etc/netctl/'
 
 errorout() { 
   echo '<openbox_pipe_menu>'
@@ -16,21 +15,19 @@ errorout() {
 
 create_profile() {
   local essid="$1" interface="$2" security="$3" key="$4"
-  local profile_file="$PROFILE_DIR/$essid"
-
+  local profile_file="$PROFILE_DIR/$interface-$essid"
   cat > "$profile_file" << EOF
-CONNECTION="wireless"
-ESSID="$essid"
-INTERFACE="$interface"
-DESCRIPTION="Automatically generated profile"
-SCAN="yes"
-IP="dhcp"
-TIMEOUT="10"
-SECURITY="$security"
+Connection=wireless
+ESSID=$essid
+Interface=$interface
+Description='Automatically generated profile'
+IP=dhcp
+Security=$security
 EOF
 
   if [[ -n "$key" ]]; then
-    echo "KEY=\"$key\"" >> "$profile_file"
+					wpa_key=$(echo "$key" | wpa_passphrase "$essid" |  sed -n 's/^\s*psk=\(.*\)$/\1/p')
+    echo "Key=\\\"$wpa_key" >> "$profile_file"
     chmod 600 "$profile_file"
   else
     chmod 644 "$profile_file"
@@ -51,7 +48,14 @@ print_menu() {
     /\<IE:.*WPA.*/        { security="wpa" }
     END { if (essid) print essid, security, quality[2]/quality[3]*100 }'
 
-  iwlist $interface scan 2>/dev/null | awk "$awkscript" | sort -t= -nrk3 > /tmp/networks.tmp
+
+		
+if ! ip addr show $interface| grep -q "UP"; then
+  ip link set $interface up &>/dev/null || errorout "$interface not up"
+  while ! ip addr show $interface | grep -q "UP"; do sleep 1; done
+fi
+  sudo iwlist $interface scan 2>/dev/null | awk "$awkscript" | sort -t= -nrk3 > /tmp/networks.tmp
+
 
   if [[ ! -s /tmp/networks.tmp ]]; then 
     rm /tmp/networks.tmp
@@ -73,33 +77,44 @@ connect() {
   local essid="$1" profile_file profile security key
 
   # check for an existing profile
-  profile_file="$(grep -REl "ESSID=[\"']?$essid[\"']?" "$PROFILE_DIR" | grep -v '~$' | head -1)"
-
+  profile_file="$(grep -REl "ESSID=$essid" "$PROFILE_DIR" | grep -v '~$' | head -1)"
   if [[ -n "$profile_file" ]]; then
     profile="$(basename "$profile_file")"
   else
-    profile="$essid"
+    profile="$interface-$essid"
     security="$(awk -F '=' "/$essid/"'{print $2}' /tmp/networks.tmp | head -n 1)"
 
     if [[ "$security" != 'none' ]]; then
       if ! key=$(zenity --entry --title="Authentication" --text="Please enter $security key for $essid" --hide-text); then
-        exit 1 # user cancelled.
+        exit 1 # user canceled.
       fi
     fi
 
     profile_file="$(create_profile "$essid" "$interface" "$security" "$key")"
   fi
 
-  if ! /usr/bin/netcfg "$profile" > /tmp/output.tmp; then
-    # connect failed, ask about removal of created profile
+	
+	# Interface needs to be down for netctl to work
+	if ip addr show $interface| grep -q "UP"; then
+  	ip link set $interface down &>/dev/null || errorout "$interface not up"
+  	while ip addr show $interface | grep -q "UP"; do sleep 1; done
+	fi
+
+
+
+	netctl switch-to "$profile"
+	if [ "$?" != "0" ]; then
     if zenity --question --title="Connection failed" \
               --text="$(grep -Eo "[\-\>]\ .*$" /tmp/output.tmp) \n Remove $profile_file?" \
               --ok-label="Remove profile"; then
 
       rm "$profile_file"
-    fi
-  fi
-
+		fi
+	else
+  	while [ "$?" == "3" ]; do sleep 1; done
+		notify-send "Connection to "$essid" established!"
+	fi
+	
   rm /tmp/output.tmp
   rm /tmp/networks.tmp
 }
@@ -109,9 +124,5 @@ connect() {
 
 interface="$1"; shift
 
-if ! ifconfig | grep -q $interface; then
-  ifconfig $interface up &>/dev/null || errorout "$interface not up"
-  while ! ifconfig | grep -q $interface; do sleep 1; done
-fi
 
 [[ "$1" = 'connect' ]] && connect "$2" || print_menu
