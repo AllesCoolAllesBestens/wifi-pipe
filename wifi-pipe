@@ -15,7 +15,6 @@ errorout() {
 
 is_active() {
 	local _int _essid
-	iwgetid > /tmp/activelist.tmp
 
 	while read -r _int _essid; do
 		if [[ "$_int" == "$1" ]]; then
@@ -82,6 +81,7 @@ fi
     errorout 'no networks found.'
   fi
 
+	iwgetid > /tmp/activelist.tmp
   echo '<openbox_pipe_menu>'
   while IFS='=' read -r essid security quality; do
 		active=""
@@ -151,5 +151,4 @@ connect() {
 
 interface="$1"; shift
 
-is_active
 [[ "$1" = 'connect' ]] && connect "$2" || print_menu
