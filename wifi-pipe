@@ -13,6 +13,24 @@ errorout() {
   exit 1
 }
 
+is_active() {
+	local _int _essid
+	iwgetid > /tmp/activelist.tmp
+
+	while read -r _int _essid; do
+		if [[ "$_int" == "$1" ]]; then
+			_essid=$(sed -n 's/^ESSID:\"\(.*\)\"$/\1/p' <<< "$_essid")
+			if [[ "$_essid" == $2 ]]; then
+				return 1
+			else
+				return 0
+			fi
+		fi
+		
+
+	done < "/tmp/activelist.tmp"
+}
+
 create_profile() {
   local essid="$1" interface="$2" security="$3" key="$4"
   local profile_file="$PROFILE_DIR/$interface-$essid"
@@ -36,9 +54,11 @@ EOF
   echo "$profile_file"
 }
 
+
+
 # prints the actual xml based on the scan
 print_menu() {
-  local essid security quality
+  local essid security quality active
 
   local awkscript='BEGIN { FS=":"; OFS="="; }
     /\<Cell/              { if (essid) print essid, security, quality[2]/quality[3]*100; security="none" }
@@ -64,13 +84,20 @@ fi
 
   echo '<openbox_pipe_menu>'
   while IFS='=' read -r essid security quality; do
-    echo "<item label=\"$essid ($security) ${quality/.*/}%\">" # trim decimals
+		active=""
+		is_active "$interface" "$essid"
+		if [[ "$?" == 1 ]]; then
+						active="(*)"
+		fi
+		echo "<item label=\"$active$essid ($security) ${quality/.*/}%\">" # trim decimals
     echo '  <action name="Execute">'
     echo "    <command>sudo $0 $interface connect \"$essid\"</command>"
     echo '  </action>'
     echo '</item>'
   done < /tmp/networks.tmp
   echo '</openbox_pipe_menu>'
+
+	rm /tmp/activelist.tmp
 }
 
 connect() {
@@ -124,5 +151,5 @@ connect() {
 
 interface="$1"; shift
 
-
+is_active
 [[ "$1" = 'connect' ]] && connect "$2" || print_menu
